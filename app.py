@@ -1,103 +1,93 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.datasets import load_wine
 from sklearn.model_selection import train_test_split
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from xgboost import XGBClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, classification_report
+import joblib
+import os
 
-# 頁面標題與設定
-st.set_page_config(page_title="Wine 機器學習分類器", layout="wide")
+# 設定頁面標題
+st.set_page_config(page_title="酒類資料集預測儀表板", layout="wide")
 
-# 1. 載入資料集
+# 模擬 sklearn 的 Bunch 物件結構，以便不改動下游程式碼
+class DataBunch:
+    def __init__(self, target):
+        self.target = target
+
+# 載入資料集
 @st.cache_data
 def load_data():
-    wine = load_wine()
-    df = pd.DataFrame(data=wine.data, columns=wine.feature_names)
-    df['target'] = wine.target
+    df = pd.read_csv('wine.csv')
+    wine = DataBunch(df['target'].values)
     return wine, df
 
-wine_data, df = load_data()
+wine_data, df_wine = load_data()
 
-# 2. 左側 Sidebar
-st.sidebar.header("模型與資訊")
-
-# 模型選擇下拉選單
+# --- Sidebar ---
+st.sidebar.header("模型設定")
 model_option = st.sidebar.selectbox(
-    "請選擇機器學習模型：",
-    ("KNN (K-最近鄰)", "Logistic Regression (羅吉斯迴歸)", "XGBoost", "Random Forest (隨機森林)")
+    "選擇預測模型",
+    ("KNN", "羅吉斯迴歸", "Random Forest", "XGBoost")
 )
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("「酒類」資料集資訊")
+st.sidebar.header("資料集資訊")
 st.sidebar.info(f"""
-**資料集名稱：** Wine (Scikit-learn 內建)
-**樣本數：** {df.shape[0]}
-**特徵數：** {df.shape[1] - 1}
-**類別數：** {len(np.unique(wine_data.target))} (Class 0, 1, 2)
+**資料集名稱：** 酒類 (Wine)
+**樣本總數：** {df_wine.shape[0]}
+**特徵數量：** {df_wine.shape[1] - 1}
+**類別數量：** {len(np.unique(wine_data.target))}
 """)
 
-# 3. 右側 Main 區域
-st.title("🍷 Wine 資料集分類分析")
-st.write(f"當前選擇的模型: **{model_option}**")
+# --- Main Area ---
+st.title("🍷 酒類資料集預測儀表板")
 
-# 數據預覽
-st.subheader("📊 資料前 5 筆預覽")
-st.dataframe(df.head())
+col1, col2 = st.columns(2)
 
-# 統計值資訊
-st.subheader("📈 特徵統計數值")
-st.write(df.describe())
+with col1:
+    st.subheader("資料集前 5 筆內容")
+    st.dataframe(df_wine.head())
+
+with col2:
+    st.subheader("特徵統計值")
+    st.dataframe(df_wine.describe())
 
 st.markdown("---")
 
-# 4. 預測與結果
-st.subheader("🤖 模型預測")
-
-# 準備訓練資料
-X = df.drop('target', axis=1)
-y = df['target']
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# 模型對應表
-models = {
-    "KNN (K-最近鄰)": KNeighborsClassifier(n_neighbors=5),
-    "Logistic Regression (羅吉斯迴歸)": LogisticRegression(max_iter=10000),
-    "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='mlogloss'),
-    "Random Forest (隨機森林)": RandomForestClassifier(n_estimators=100)
+# 模型檔案路徑映射
+MODEL_PATHS = {
+    "KNN": "k-nearest_neighbors_model.joblib",
+    "羅吉斯迴歸": "logistic_regression_model.joblib",
+    "Random Forest": "random_forest_model.joblib",
+    "XGBoost": "xgboost_model.joblib"
 }
 
-if st.button("🚀 開始進行預測"):
-    with st.spinner('模型訓練中，請稍候...'):
-        # 選擇並訓練模型
-        model = models[model_option]
-        model.fit(X_train, y_train)
-        
-        # 預測
-        y_pred = model.predict(X_test)
-        acc = accuracy_score(y_test, y_pred)
-        
-        # 顯示結果
-        st.success("✅ 預測完成！")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric(label="準確度 (Accuracy)", value=f"{acc:.2%}")
-        
-        with col2:
-            st.write("**測試集前 5 筆預測結果 vs 實際結果：**")
-            results_df = pd.DataFrame({
-                '實際類別': y_test[:5].values,
-                '預測類別': y_pred[:5]
-            })
-            st.table(results_df)
-
-        # 視覺化簡單說明 (特徵重要性 - 僅 RandomForest 與 XGBoost)
-        if model_option in ["Random Forest (隨機森林)", "XGBoost"]:
-            st.subheader("📌 特徵重要性 (Feature Importance)")
-            importances = model.feature_importances_
-            feat_imp = pd.Series(importances, index=X.columns).sort_values(ascending=False)
-            st.bar_chart(feat_imp)
+if st.button("進行預測"):
+    # 資料準備
+    X = df_wine.drop('target', axis=1)
+    y = df_wine['target']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # 載入預訓練模型
+    model_path = MODEL_PATHS.get(model_option)
+    
+    if os.path.exists(model_path):
+        try:
+            model = joblib.load(model_path)
+            
+            # 預測
+            y_pred = model.predict(X_test)
+            acc = accuracy_score(y_test, y_pred)
+            
+            # 顯示結果
+            st.success(f"### 預測完成！(使用預訓練模型：{os.path.basename(model_path)})")
+            st.metric(label="模型準確度 (Accuracy)", value=f"{acc:.2%}")
+            
+            st.subheader("分類報告 (Classification Report)")
+            report = classification_report(y_test, y_pred, output_dict=True)
+            report_df = pd.DataFrame(report).transpose()
+            st.dataframe(report_df)
+        except Exception as e:
+            st.error(f"載入模型時發生錯誤：{e}")
+    else:
+        st.error(f"找不到預訓練模型檔案：{model_path}")
